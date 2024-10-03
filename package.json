@@ -1,0 +1,43 @@
+{
+    "name": "@run-slicer/hprof",
+    "version": "0.1.0",
+    "type": "module",
+    "author": "run-slicer",
+    "license": "MIT",
+    "description": "A streaming hprof file reader library for the JS ecosystem.",
+    "keywords": [
+        "java",
+        "hprof",
+        "heapdump",
+        "profiling",
+        "reader"
+    ],
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        }
+    },
+    "files": [
+        "./dist/**/*",
+        "package.json",
+        "README.md",
+        "LICENSE"
+    ],
+    "scripts": {
+        "build": "tsc --project tsconfig.build.json",
+        "test": "mocha",
+        "format": "prettier . --write"
+    },
+    "devDependencies": {
+        "@types/chai": "^4.3.17",
+        "@types/mocha": "^10.0.7",
+        "@types/node": "^22.5.0",
+        "chai": "^5.1.1",
+        "mocha": "^10.7.3",
+        "prettier": "^3.3.3",
+        "tsx": "^4.17.0",
+        "typescript": "^5.5.4"
+    },
+    "packageManager": "pnpm@9.12.0+sha512.4abf725084d7bcbafbd728bfc7bee61f2f791f977fd87542b3579dcb23504d170d46337945e4c66485cd12d588a0c0e570ed9c477e7ccdd8507cf05f3f92eaca"
+}
