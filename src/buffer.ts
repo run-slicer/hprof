@@ -13,7 +13,8 @@ export interface Buffer {
     offset: number;
 
     get(length: number): Promise<Uint8Array>;
-    take(term: number): Promise<Uint8Array>; // exclusive
+    skip(length: number): Promise<void>;
+    take(termValue: number): Promise<Uint8Array>; // exclusive
     getFloat32(): Promise<number>;
     getFloat64(): Promise<number>;
     getInt8(): Promise<number>;
@@ -28,17 +29,6 @@ export interface Buffer {
 
 const arrayToView = (arr: Uint8Array): DataView => {
     return new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
-};
-
-const ensure = async (buffer: Buffer, length: number) => {
-    while (buffer.offset + length > buffer.view.byteLength) {
-        const { done, value } = await buffer.reader.read();
-        if (done) {
-            throw EOF;
-        }
-
-        await update(buffer, value);
-    }
 };
 
 const update = async (buffer: Buffer, new_: Uint8Array) => {
@@ -61,6 +51,17 @@ const update = async (buffer: Buffer, new_: Uint8Array) => {
     buffer.offset = 0;
 };
 
+const ensure = async (buffer: Buffer, length: number) => {
+    while (buffer.offset + length > buffer.view.byteLength) {
+        const { done, value } = await buffer.reader.read();
+        if (done) {
+            throw EOF;
+        }
+
+        await update(buffer, value);
+    }
+};
+
 export const wrap = (stream: ReadableStream<Uint8Array>, littleEndian: boolean = DEFAULT_LITTLE_ENDIAN): Buffer => {
     return {
         reader: stream.getReader(),
@@ -75,6 +76,26 @@ export const wrap = (stream: ReadableStream<Uint8Array>, littleEndian: boolean =
             const value = new Uint8Array(this.view.buffer.slice(offset, offset + length));
             this.offset += length;
             return value;
+        },
+
+        async skip(length: number): Promise<void> {
+            while (length > 0) {
+                const available = this.view.byteLength - this.offset;
+                if (available >= length) {
+                    this.offset += length;
+                    return;
+                }
+
+                length -= available;
+
+                const { done, value } = await this.reader.read();
+                if (done) {
+                    throw EOF;
+                }
+
+                this.view = arrayToView(value);
+                this.offset = 0;
+            }
         },
 
         async getBigInt64(): Promise<bigint> {
@@ -157,15 +178,15 @@ export const wrap = (stream: ReadableStream<Uint8Array>, littleEndian: boolean =
             return value;
         },
 
-        async take(term: number): Promise<Uint8Array> {
+        async take(termValue: number): Promise<Uint8Array> {
             const result: number[] = [];
             while (true) {
-                const char = await this.getUint8();
-                if (char === term) {
+                const byte = await this.getUint8();
+                if (byte === termValue) {
                     break;
                 }
 
-                result.push(char);
+                result.push(byte);
             }
 
             return new Uint8Array(result);

@@ -12,15 +12,29 @@ describe("reader", () => {
                 console.log(`header: ${header}`);
                 console.log(`identifier size: ${idSize}`);
                 console.log(`timestamp: ${new Date(Number(timestamp))}`);
+                console.log();
             },
-            record(tag, timestampDelta, body) {
-                if (count === 0) {
+            record(tag, tsDelta, length) {
+                if (count < 5) {
                     console.log(`tag: ${tag} (${Tag[tag]})`);
-                    console.log(`timestamp delta: ${timestampDelta}`);
-                    console.log(`body length: ${body.length}`);
+                    console.log(`timestamp delta: ${tsDelta}`);
+                    console.log(`body length: ${length}`);
+                    console.log();
                 }
 
                 count++;
+                return null /*{
+                    utf8(id, value) {
+                        // console.log(`${id}: ${value}`);
+                    },
+                    heapSummary(liveBytes, liveInsts, allocBytes, allocInsts) {
+                        console.log(`live bytes: ${liveBytes}`);
+                        console.log(`live instances: ${liveInsts}`);
+                        console.log(`allocated bytes: ${allocBytes}`);
+                        console.log(`allocated instances: ${allocInsts}`);
+                        console.log();
+                    },
+                }*/;
             },
         });
 
