@@ -23,7 +23,19 @@ describe("reader", () => {
                 }
 
                 count++;
-                return null /*{
+                return {
+                    utf8() {},
+                    loadClass() {},
+                    unloadClass() {},
+                    frame() {},
+                    trace() {},
+                    startThread() {},
+                    endThread() {},
+                    heapSummary() {},
+                    cpuSamples() {},
+                    controlSettings() {},
+                    raw() {},
+                } /*{
                     utf8(id, value) {
                         // console.log(`${id}: ${value}`);
                     },
@@ -39,5 +51,5 @@ describe("reader", () => {
         });
 
         console.log(`record count: ${count}`);
-    }).timeout(5000);
+    }).timeout(10000);
 });

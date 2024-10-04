@@ -21,6 +21,11 @@ export enum Tag {
     HEAP_DUMP_END = 0x2c,
 }
 
+export interface CPUTrace {
+    samples: number;
+    stackNum: number;
+}
+
 export interface RecordVisitor {
     utf8?: (id: bigint, value: string) => Awaitable<void>;
     loadClass?: (num: number, objId: bigint, stackNum: number, nameId: bigint) => Awaitable<void>;
@@ -30,10 +35,22 @@ export interface RecordVisitor {
         methodNameId: bigint,
         methodSigId: bigint,
         sfNameId: bigint,
-        num: number,
+        classNum: number,
         lineNum: number
     ) => Awaitable<void>;
+    trace?: (stackNum: number, threadNum: number, frameIds: bigint[]) => Awaitable<void>;
+    startThread?: (
+        num: number,
+        objId: bigint,
+        stackNum: number,
+        nameId: bigint,
+        groupNameId: bigint,
+        groupParentNameId: bigint
+    ) => Awaitable<void>;
+    endThread?: (num: number) => Awaitable<void>;
     heapSummary?: (liveBytes: number, liveInsts: number, allocBytes: bigint, allocInsts: bigint) => Awaitable<void>;
+    cpuSamples?: (totalSamples: number, traces: CPUTrace[]) => Awaitable<void>;
+    controlSettings?: (flag: number, traceDepth: number) => Awaitable<void>;
     raw?: (data: Uint8Array) => Awaitable<void>;
 }
 
@@ -121,6 +138,46 @@ const readRecord = async (buffer: Buffer, visitor: Visitor, idSize: number) => {
                 }
                 break;
             }
+            case Tag.TRACE: {
+                if (rv.trace) {
+                    const stackNum = await buffer.getUint32();
+                    const threadNum = await buffer.getUint32();
+                    const numFrames = await buffer.getUint32();
+
+                    const frames = new Array<bigint>(numFrames);
+                    for (let i = 0; i < numFrames; i++) {
+                        frames[i] = await readId(buffer, idSize);
+                    }
+
+                    await rv.trace(stackNum, threadNum, frames);
+                } else {
+                    await readRecordRaw(buffer, rv, length);
+                }
+                break;
+            }
+            case Tag.START_THREAD: {
+                if (rv.startThread) {
+                    await rv.startThread(
+                        await buffer.getUint32(),
+                        await readId(buffer, idSize),
+                        await buffer.getUint32(),
+                        await readId(buffer, idSize),
+                        await readId(buffer, idSize),
+                        await readId(buffer, idSize)
+                    );
+                } else {
+                    await readRecordRaw(buffer, rv, length);
+                }
+                break;
+            }
+            case Tag.END_THREAD: {
+                if (rv.endThread) {
+                    await rv.endThread(await buffer.getUint32());
+                } else {
+                    await readRecordRaw(buffer, rv, length);
+                }
+                break;
+            }
             case Tag.HEAP_SUMMARY: {
                 if (rv.heapSummary) {
                     await rv.heapSummary(
@@ -129,6 +186,30 @@ const readRecord = async (buffer: Buffer, visitor: Visitor, idSize: number) => {
                         await buffer.getBigUint64(),
                         await buffer.getBigUint64()
                     );
+                } else {
+                    await readRecordRaw(buffer, rv, length);
+                }
+                break;
+            }
+            case Tag.CPU_SAMPLES: {
+                if (rv.cpuSamples) {
+                    const totalSamples = await buffer.getUint32();
+                    const numTraces = await buffer.getUint32();
+
+                    const traces = new Array<CPUTrace>(numTraces);
+                    for (let i = 0; i < numTraces; i++) {
+                        traces[i] = { samples: await buffer.getUint32(), stackNum: await buffer.getUint32() };
+                    }
+
+                    await rv.cpuSamples(totalSamples, traces);
+                } else {
+                    await readRecordRaw(buffer, rv, length);
+                }
+                break;
+            }
+            case Tag.CONTROL_SETTINGS: {
+                if (rv.controlSettings) {
+                    await rv.controlSettings(await buffer.getUint32(), await buffer.getUint16());
                 } else {
                     await readRecordRaw(buffer, rv, length);
                 }
