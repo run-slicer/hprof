@@ -29,6 +29,7 @@ describe("reader", () => {
                     unloadClass() {},
                     frame() {},
                     trace() {},
+                    allocSites() {},
                     startThread() {},
                     endThread() {},
                     heapSummary() {},
