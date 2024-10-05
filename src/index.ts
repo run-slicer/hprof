@@ -50,11 +50,29 @@ export enum Type {
     LONG = 11,
 }
 
+export interface Value<T> {
+    type: Type;
+    value: T;
+}
+
+export interface NumberValue extends Value<number> {
+    type: Type.BOOLEAN | Type.CHAR | Type.FLOAT | Type.DOUBLE | Type.BYTE | Type.SHORT | Type.INT;
+}
+
+export interface LongValue extends Value<bigint> {
+    type: Type.NORMAL_OBJECT | Type.LONG;
+}
+
 export interface HeapDumpRecordVisitor {
     gcRootUnknown?: (objId: bigint) => Awaitable<void>;
     gcRootThreadObj?: (objId: bigint, seq: number, stackSeq: number) => Awaitable<void>;
     gcRootJniGlobal?: (objId: bigint, jniRefId: bigint) => Awaitable<void>;
-    raw?: (tag: number, data: Uint8Array) => Awaitable<void>;
+    gcRootJniLocal?: (objId: bigint, threadNum: number, frameNum: number) => Awaitable<void>;
+    gcRootJavaFrame?: (objId: bigint, threadNum: number, frameNum: number) => Awaitable<void>;
+    gcRootNativeStack?: (objId: bigint, threadNum: number) => Awaitable<void>;
+    gcRootStickyClass?: (objId: bigint) => Awaitable<void>;
+    gcRootThreadBlock?: (objId: bigint, threadNum: number) => Awaitable<void>;
+    gcRootMonitorUsed?: (objId: bigint) => Awaitable<void>;
 }
 
 export interface AllocationSite {
@@ -134,10 +152,6 @@ const readId = async (buffer: Buffer, size: number): Promise<bigint> => {
 
 const decoder = new TextDecoder();
 
-const readHDSubRecordRaw = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, tag: number, length: number) => {
-    return visitor.raw ? visitor.raw(tag, await buffer.get(length)) : buffer.skip(length);
-};
-
 const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, idSize: number): Promise<number> => {
     const tag = await buffer.getUint8();
     switch (tag) {
@@ -145,7 +159,7 @@ const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, i
             if (visitor.gcRootUnknown) {
                 await visitor.gcRootUnknown(await readId(buffer, idSize));
             } else {
-                await readHDSubRecordRaw(buffer, visitor, tag, idSize);
+                await buffer.skip(idSize);
             }
             return;
         }
@@ -157,7 +171,7 @@ const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, i
                     await buffer.getUint32()
                 );
             } else {
-                await readHDSubRecordRaw(buffer, visitor, tag, idSize + 8);
+                await buffer.skip(idSize + 8);
             }
             return;
         }
@@ -165,7 +179,55 @@ const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, i
             if (visitor.gcRootJniGlobal) {
                 await visitor.gcRootJniGlobal(await readId(buffer, idSize), await readId(buffer, idSize));
             } else {
-                await readHDSubRecordRaw(buffer, visitor, tag, idSize * 2);
+                await buffer.skip(idSize * 2);
+            }
+            return;
+        }
+        case HeapDumpTag.GC_ROOT_JNI_LOCAL: {
+            if (visitor.gcRootJniLocal) {
+                await visitor.gcRootJniLocal(await readId(buffer, idSize), await buffer.getUint32(), await buffer.getUint32());
+            } else {
+                await buffer.skip(idSize + 8);
+            }
+            return;
+        }
+        case HeapDumpTag.GC_ROOT_JAVA_FRAME: {
+            if (visitor.gcRootJavaFrame) {
+                await visitor.gcRootJavaFrame(await readId(buffer, idSize), await buffer.getUint32(), await buffer.getUint32());
+            } else {
+                await buffer.skip(idSize + 8);
+            }
+            return;
+        }
+        case HeapDumpTag.GC_ROOT_NATIVE_STACK: {
+            if (visitor.gcRootNativeStack) {
+                await visitor.gcRootNativeStack(await readId(buffer, idSize), await buffer.getUint32());
+            } else {
+                await buffer.skip(idSize + 4);
+            }
+            return;
+        }
+        case HeapDumpTag.GC_ROOT_STICKY_CLASS: {
+            if (visitor.gcRootStickyClass) {
+                await visitor.gcRootStickyClass(await readId(buffer, idSize));
+            } else {
+                await buffer.skip(idSize);
+            }
+            return;
+        }
+        case HeapDumpTag.GC_ROOT_THREAD_BLOCK: {
+            if (visitor.gcRootThreadBlock) {
+                await visitor.gcRootThreadBlock(await readId(buffer, idSize), await buffer.getUint32());
+            } else {
+                await buffer.skip(idSize + 4);
+            }
+            return;
+        }
+        case HeapDumpTag.GC_ROOT_MONITOR_USED: {
+            if (visitor.gcRootMonitorUsed) {
+                await visitor.gcRootMonitorUsed(await readId(buffer, idSize));
+            } else {
+                await buffer.skip(idSize);
             }
             return;
         }
