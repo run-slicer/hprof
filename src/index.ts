@@ -51,7 +51,7 @@ export enum Type {
 }
 
 export interface Value<T> {
-    type: Type;
+    type: number | Type;
     value: T;
 }
 
@@ -61,6 +61,19 @@ export interface NumberValue extends Value<number> {
 
 export interface LongValue extends Value<bigint> {
     type: Type.NORMAL_OBJECT | Type.LONG;
+}
+
+export interface PoolItem {
+    index: number;
+    value: Value<any>;
+}
+
+export type Pool = PoolItem[];
+
+export interface Field {
+    name: bigint;
+    type: number | Type;
+    value?: Value<any>; // static if set
 }
 
 export interface HeapDumpRecordVisitor {
@@ -73,10 +86,32 @@ export interface HeapDumpRecordVisitor {
     gcRootStickyClass?: (objId: bigint) => Awaitable<void>;
     gcRootThreadBlock?: (objId: bigint, threadNum: number) => Awaitable<void>;
     gcRootMonitorUsed?: (objId: bigint) => Awaitable<void>;
+    gcClassDump?: (
+        clsObjId: bigint,
+        stackNum: number,
+        superObjId: bigint,
+        loaderObjId: bigint,
+        signerObjId: bigint,
+        protDomainObjId: bigint,
+        reserved1: bigint,
+        reserved2: bigint,
+        instSize: number,
+        pool: Pool,
+        staticFields: Field[],
+        instFields: Field[]
+    ) => Awaitable<void>;
+    gcInstanceDump?: (objId: bigint, stackNum: number, classObjId: bigint, fieldValues: Uint8Array) => Awaitable<void>;
+    gcObjArrayDump?: (arrObjId: bigint, stackNum: number, arrClsId: bigint, elems: bigint[]) => Awaitable<void>;
+    gcPrimArrayDump?: (
+        arrObjId: bigint,
+        stackNum: number,
+        elemType: number | Type,
+        elems: Value<any>[]
+    ) => Awaitable<void>;
 }
 
 export interface AllocationSite {
-    array: Type;
+    array: number | Type;
     num: number;
     stackNum: number;
     liveBytes: number;
@@ -150,7 +185,51 @@ const readId = async (buffer: Buffer, size: number): Promise<bigint> => {
     throw new Error(`Unsupported identifier size ${size}`);
 };
 
-const decoder = new TextDecoder();
+const getValueSize = (type: number | Type, idSize: number): number => {
+    switch (type) {
+        case Type.ARRAY_OBJECT:
+        case Type.NORMAL_OBJECT:
+            return idSize;
+        case Type.BOOLEAN:
+        case Type.BYTE:
+            return 1;
+        case Type.CHAR:
+        case Type.SHORT:
+            return 2;
+        case Type.FLOAT:
+        case Type.INT:
+            return 4;
+        case Type.DOUBLE:
+        case Type.LONG:
+            return 8;
+    }
+
+    throw new Error(`Unsupported value type ${type}`);
+};
+
+const readValue = (buffer: Buffer, type: number | Type, idSize: number): Promise<any> => {
+    switch (type) {
+        case Type.ARRAY_OBJECT:
+        case Type.NORMAL_OBJECT:
+            return readId(buffer, idSize);
+        case Type.BOOLEAN:
+        case Type.BYTE:
+            return buffer.getUint8();
+        case Type.CHAR:
+        case Type.SHORT:
+            return buffer.getUint16();
+        case Type.FLOAT:
+            return buffer.getFloat32();
+        case Type.DOUBLE:
+            return buffer.getFloat64();
+        case Type.INT:
+            return buffer.getUint32();
+        case Type.LONG:
+            return buffer.getBigUint64();
+    }
+
+    throw new Error(`Unsupported value type ${type}`);
+};
 
 const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, idSize: number): Promise<number> => {
     const tag = await buffer.getUint8();
@@ -161,7 +240,7 @@ const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, i
             } else {
                 await buffer.skip(idSize);
             }
-            return;
+            return 1 + idSize;
         }
         case HeapDumpTag.GC_ROOT_THREAD_OBJ: {
             if (visitor.gcRootThreadObj) {
@@ -173,7 +252,7 @@ const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, i
             } else {
                 await buffer.skip(idSize + 8);
             }
-            return;
+            return 1 + idSize + 8;
         }
         case HeapDumpTag.GC_ROOT_JNI_GLOBAL: {
             if (visitor.gcRootJniGlobal) {
@@ -181,23 +260,31 @@ const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, i
             } else {
                 await buffer.skip(idSize * 2);
             }
-            return;
+            return 1 + idSize * 2;
         }
         case HeapDumpTag.GC_ROOT_JNI_LOCAL: {
             if (visitor.gcRootJniLocal) {
-                await visitor.gcRootJniLocal(await readId(buffer, idSize), await buffer.getUint32(), await buffer.getUint32());
+                await visitor.gcRootJniLocal(
+                    await readId(buffer, idSize),
+                    await buffer.getUint32(),
+                    await buffer.getUint32()
+                );
             } else {
                 await buffer.skip(idSize + 8);
             }
-            return;
+            return 1 + idSize + 8;
         }
         case HeapDumpTag.GC_ROOT_JAVA_FRAME: {
             if (visitor.gcRootJavaFrame) {
-                await visitor.gcRootJavaFrame(await readId(buffer, idSize), await buffer.getUint32(), await buffer.getUint32());
+                await visitor.gcRootJavaFrame(
+                    await readId(buffer, idSize),
+                    await buffer.getUint32(),
+                    await buffer.getUint32()
+                );
             } else {
                 await buffer.skip(idSize + 8);
             }
-            return;
+            return 1 + idSize + 8;
         }
         case HeapDumpTag.GC_ROOT_NATIVE_STACK: {
             if (visitor.gcRootNativeStack) {
@@ -205,7 +292,7 @@ const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, i
             } else {
                 await buffer.skip(idSize + 4);
             }
-            return;
+            return 1 + idSize + 4;
         }
         case HeapDumpTag.GC_ROOT_STICKY_CLASS: {
             if (visitor.gcRootStickyClass) {
@@ -213,7 +300,7 @@ const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, i
             } else {
                 await buffer.skip(idSize);
             }
-            return;
+            return 1 + idSize;
         }
         case HeapDumpTag.GC_ROOT_THREAD_BLOCK: {
             if (visitor.gcRootThreadBlock) {
@@ -221,7 +308,7 @@ const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, i
             } else {
                 await buffer.skip(idSize + 4);
             }
-            return;
+            return 1 + idSize + 4;
         }
         case HeapDumpTag.GC_ROOT_MONITOR_USED: {
             if (visitor.gcRootMonitorUsed) {
@@ -229,7 +316,170 @@ const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, i
             } else {
                 await buffer.skip(idSize);
             }
-            return;
+            return 1 + idSize;
+        }
+        case HeapDumpTag.GC_CLASS_DUMP: {
+            let length = idSize * 7 + 8;
+            if (visitor.gcClassDump) {
+                const classObjId = await readId(buffer, idSize);
+                const stackNum = await buffer.getUint32();
+                const superObjId = await readId(buffer, idSize);
+                const loaderObjId = await readId(buffer, idSize);
+                const signerObjId = await readId(buffer, idSize);
+                const protDomainObjId = await readId(buffer, idSize);
+                const reserved1 = await readId(buffer, idSize);
+                const reserved2 = await readId(buffer, idSize);
+                const instSize = await buffer.getUint32();
+
+                const constPoolSize = await buffer.getUint16();
+                length += 2;
+
+                const constPool = new Array<PoolItem>(constPoolSize);
+                for (let i = 0; i < constPoolSize; i++) {
+                    const index = await buffer.getUint16();
+                    const type = await buffer.getUint8();
+
+                    constPool[i] = {
+                        index,
+                        value: { type, value: await readValue(buffer, type, idSize) },
+                    };
+
+                    length += 3 + getValueSize(type, idSize);
+                }
+
+                const numStaticFields = await buffer.getUint16();
+                length += 2;
+
+                const staticFields = new Array<Field>(numStaticFields);
+                for (let i = 0; i < numStaticFields; i++) {
+                    const name = await readId(buffer, idSize);
+                    const type = await buffer.getUint8();
+
+                    staticFields[i] = {
+                        name,
+                        type,
+                        value: { type, value: await readValue(buffer, type, idSize) },
+                    };
+
+                    length += idSize + 1 + getValueSize(type, idSize);
+                }
+
+                const numInstFields = await buffer.getUint16();
+                length += 2 + (1 + idSize) * numInstFields;
+
+                const instFields = new Array<Field>(numInstFields);
+                for (let i = 0; i < numInstFields; i++) {
+                    instFields[i] = {
+                        name: await readId(buffer, idSize),
+                        type: await buffer.getUint8(),
+                    };
+                }
+
+                await visitor.gcClassDump(
+                    classObjId,
+                    stackNum,
+                    superObjId,
+                    loaderObjId,
+                    signerObjId,
+                    protDomainObjId,
+                    reserved1,
+                    reserved2,
+                    instSize,
+                    constPool,
+                    staticFields,
+                    instFields
+                );
+            } else {
+                await buffer.skip(length);
+
+                const constPoolSize = await buffer.getUint16();
+                length += 2;
+
+                for (let i = 0; i < constPoolSize; i++) {
+                    await buffer.skip(2);
+                    const size = getValueSize(await buffer.getUint8(), idSize);
+                    await buffer.skip(size);
+
+                    length += 3 + size;
+                }
+
+                const numStaticFields = await buffer.getUint16();
+                length += 2;
+
+                for (let i = 0; i < numStaticFields; i++) {
+                    await buffer.skip(idSize);
+                    const size = getValueSize(await buffer.getUint8(), idSize);
+                    await buffer.skip(size);
+
+                    length += idSize + 1 + size;
+                }
+
+                const numInstFields = await buffer.getUint16();
+                const size = (1 + idSize) * numInstFields;
+                await buffer.skip(size);
+
+                length += 2 + size;
+            }
+            return 1 + length;
+        }
+        case HeapDumpTag.GC_INSTANCE_DUMP: {
+            let numBytes: number;
+            if (visitor.gcInstanceDump) {
+                const objId = await readId(buffer, idSize);
+                const stackNum = await buffer.getUint32();
+                const classObjId = await readId(buffer, idSize);
+                numBytes = await buffer.getUint32();
+
+                await visitor.gcInstanceDump(objId, stackNum, classObjId, await buffer.get(numBytes));
+            } else {
+                await buffer.skip(idSize * 2 + 4);
+                numBytes = await buffer.getUint32();
+                await buffer.skip(numBytes);
+            }
+            return 1 + idSize * 2 + 8 + numBytes;
+        }
+        case HeapDumpTag.GC_OBJ_ARRAY_DUMP: {
+            let numElems: number;
+            if (visitor.gcObjArrayDump) {
+                const arrObjId = await readId(buffer, idSize);
+                const stackNum = await buffer.getUint32();
+                numElems = await buffer.getUint32();
+                const arrClsId = await readId(buffer, idSize);
+
+                const elems = new Array<bigint>(numElems);
+                for (let i = 0; i < numElems; i++) {
+                    elems[i] = await readId(buffer, idSize);
+                }
+
+                await visitor.gcObjArrayDump(arrObjId, stackNum, arrClsId, elems);
+            } else {
+                await buffer.skip(idSize + 4);
+                numElems = await buffer.getUint32();
+                await buffer.skip(idSize * (1 + numElems));
+            }
+            return 1 + idSize * (2 + numElems) + 8;
+        }
+        case HeapDumpTag.GC_PRIM_ARRAY_DUMP: {
+            let numElems: number, elemType: number;
+            if (visitor.gcPrimArrayDump) {
+                const arrObjId = await readId(buffer, idSize);
+                const stackNum = await buffer.getUint32();
+                numElems = await buffer.getUint32();
+                elemType = await buffer.getUint8();
+
+                const elems = new Array<Value<any>>(numElems);
+                for (let i = 0; i < numElems; i++) {
+                    elems[i] = { type: elemType, value: await readValue(buffer, elemType, idSize) };
+                }
+
+                await visitor.gcPrimArrayDump(arrObjId, stackNum, elemType, elems);
+            } else {
+                await buffer.skip(idSize + 4);
+                numElems = await buffer.getUint32();
+                elemType = await buffer.getUint8();
+                await buffer.skip(numElems * getValueSize(elemType, idSize));
+            }
+            return 1 + idSize + 9 + numElems * getValueSize(elemType, idSize);
         }
     }
 
@@ -239,6 +489,8 @@ const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, i
 const readRecordRaw = async (buffer: Buffer, visitor: RecordVisitor, length: number) => {
     return visitor.raw ? visitor.raw(await buffer.get(length)) : buffer.skip(length);
 };
+
+const decoder = new TextDecoder();
 
 const readRecord = async (buffer: Buffer, visitor: Visitor, idSize: number) => {
     const tag = await buffer.getUint8();
@@ -387,6 +639,10 @@ const readRecord = async (buffer: Buffer, visitor: Visitor, idSize: number) => {
                     let remaining = length;
                     while (remaining > 0) {
                         remaining -= await readHDSubRecord(buffer, hdrv, idSize);
+                    }
+
+                    if (remaining !== 0) {
+                        throw new Error("Buffer underflow");
                     }
                 } else {
                     await buffer.skip(length);

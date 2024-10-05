@@ -1,5 +1,6 @@
 import { createReadStream } from "node:fs";
 import { Readable } from "node:stream";
+import { expect } from "chai";
 import { read, Tag } from "./";
 
 describe("reader", () => {
@@ -33,6 +34,23 @@ describe("reader", () => {
                     startThread() {},
                     endThread() {},
                     heapSummary() {},
+                    heapDump() {
+                        return {
+                            gcRootUnknown() {},
+                            gcRootThreadObj() {},
+                            gcRootJniGlobal() {},
+                            gcRootJniLocal() {},
+                            gcRootJavaFrame() {},
+                            gcRootNativeStack() {},
+                            gcRootStickyClass() {},
+                            gcRootThreadBlock() {},
+                            gcRootMonitorUsed() {},
+                            gcClassDump() {},
+                            gcInstanceDump() {},
+                            gcObjArrayDump() {},
+                            gcPrimArrayDump() {},
+                        };
+                    },
                     cpuSamples() {},
                     controlSettings() {},
                     raw() {},
@@ -52,5 +70,6 @@ describe("reader", () => {
         });
 
         console.log(`record count: ${count}`);
-    }).timeout(10000);
+        expect(count).to.equal(1041772);
+    }).timeout(-1);
 });
