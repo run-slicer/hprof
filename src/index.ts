@@ -185,7 +185,7 @@ const readId = async (buffer: Buffer, size: number): Promise<bigint> => {
     throw new Error(`Unsupported identifier size ${size}`);
 };
 
-const getValueSize = (type: number | Type, idSize: number): number => {
+export const valueSize = (type: number | Type, idSize: number = -1): number => {
     switch (type) {
         case Type.ARRAY_OBJECT:
         case Type.NORMAL_OBJECT:
@@ -344,7 +344,7 @@ const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, i
                         value: { type, value: await readValue(buffer, type, idSize) },
                     };
 
-                    length += 3 + getValueSize(type, idSize);
+                    length += 3 + valueSize(type, idSize);
                 }
 
                 const numStaticFields = await buffer.getUint16();
@@ -361,7 +361,7 @@ const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, i
                         value: { type, value: await readValue(buffer, type, idSize) },
                     };
 
-                    length += idSize + 1 + getValueSize(type, idSize);
+                    length += idSize + 1 + valueSize(type, idSize);
                 }
 
                 const numInstFields = await buffer.getUint16();
@@ -397,7 +397,7 @@ const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, i
 
                 for (let i = 0; i < constPoolSize; i++) {
                     await buffer.skip(2);
-                    const size = getValueSize(await buffer.getUint8(), idSize);
+                    const size = valueSize(await buffer.getUint8(), idSize);
                     await buffer.skip(size);
 
                     length += 3 + size;
@@ -408,7 +408,7 @@ const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, i
 
                 for (let i = 0; i < numStaticFields; i++) {
                     await buffer.skip(idSize);
-                    const size = getValueSize(await buffer.getUint8(), idSize);
+                    const size = valueSize(await buffer.getUint8(), idSize);
                     await buffer.skip(size);
 
                     length += idSize + 1 + size;
@@ -477,9 +477,9 @@ const readHDSubRecord = async (buffer: Buffer, visitor: HeapDumpRecordVisitor, i
                 await buffer.skip(idSize + 4);
                 numElems = await buffer.getUint32();
                 elemType = await buffer.getUint8();
-                await buffer.skip(numElems * getValueSize(elemType, idSize));
+                await buffer.skip(numElems * valueSize(elemType, idSize));
             }
-            return 1 + idSize + 9 + numElems * getValueSize(elemType, idSize);
+            return 1 + idSize + 9 + numElems * valueSize(elemType, idSize);
         }
     }
 
