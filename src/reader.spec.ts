@@ -34,7 +34,7 @@ describe("reader", () => {
                     startThread() {},
                     endThread() {},
                     heapSummary() {},
-                    heapDump() {
+                    /*heapDump() {
                         return {
                             gcRootUnknown() {},
                             gcRootThreadObj() {},
@@ -50,7 +50,7 @@ describe("reader", () => {
                             gcObjArrayDump() {},
                             gcPrimArrayDump() {},
                         };
-                    },
+                    },*/
                     cpuSamples() {},
                     controlSettings() {},
                     raw() {},

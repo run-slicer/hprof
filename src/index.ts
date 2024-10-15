@@ -171,21 +171,21 @@ export interface Visitor {
 
 export const valueSize = (type: number | Type, idSize: number = -1): number => {
     switch (type) {
-        case Type.ARRAY_OBJECT:
-        case Type.NORMAL_OBJECT:
-            return idSize;
         case Type.BOOLEAN:
         case Type.BYTE:
             return 1;
-        case Type.CHAR:
-        case Type.SHORT:
-            return 2;
         case Type.FLOAT:
         case Type.INT:
             return 4;
         case Type.DOUBLE:
         case Type.LONG:
             return 8;
+        case Type.CHAR:
+        case Type.SHORT:
+            return 2;
+        case Type.ARRAY_OBJECT:
+        case Type.NORMAL_OBJECT:
+            return idSize;
     }
 
     throw new Error(`Unsupported value type ${type}`);
@@ -212,29 +212,29 @@ const idReader = (buffer: Buffer, size: number): ReaderFunc<bigint> => {
 
 const valueReader = (buffer: Buffer, type: number | Type, readId: ReaderFunc<bigint>): ReaderFunc<any> => {
     switch (type) {
-        case Type.ARRAY_OBJECT:
-        case Type.NORMAL_OBJECT:
-            return readId;
         case Type.BOOLEAN:
         case Type.BYTE:
             return () => buffer.getUint8();
-        case Type.CHAR:
-        case Type.SHORT:
-            return () => buffer.getUint16();
-        case Type.FLOAT:
-            return () => buffer.getFloat32();
-        case Type.DOUBLE:
-            return () => buffer.getFloat64();
         case Type.INT:
             return () => buffer.getUint32();
         case Type.LONG:
             return () => buffer.getBigUint64();
+        case Type.FLOAT:
+            return () => buffer.getFloat32();
+        case Type.DOUBLE:
+            return () => buffer.getFloat64();
+        case Type.CHAR:
+        case Type.SHORT:
+            return () => buffer.getUint16();
+        case Type.ARRAY_OBJECT:
+        case Type.NORMAL_OBJECT:
+            return readId;
     }
 
     throw new Error(`Unsupported value type ${type}`);
 };
 
-const readHDSubRecord = async (
+const readSubRecord = async (
     buffer: Buffer,
     visitor: HeapDumpRecordVisitor,
     idSize: number,
@@ -484,11 +484,23 @@ const readHDSubRecord = async (
     throw new Error(`Unsupported heap dump sub-record tag ${tag}`);
 };
 
-const readRecordRaw = async (buffer: Buffer, visitor: RecordVisitor, length: number) => {
-    return visitor.raw ? visitor.raw(await buffer.get(length)) : buffer.skip(length);
-};
-
 const decoder = new TextDecoder();
+
+const recordHandlers: Record<number, string> = {
+    [Tag.UTF8]: "utf8",
+    [Tag.LOAD_CLASS]: "loadClass",
+    [Tag.UNLOAD_CLASS]: "unloadClass",
+    [Tag.FRAME]: "frame",
+    [Tag.TRACE]: "trace",
+    [Tag.ALLOC_SITES]: "allocSites",
+    [Tag.HEAP_SUMMARY]: "heapSummary",
+    [Tag.START_THREAD]: "startThread",
+    [Tag.END_THREAD]: "endThread",
+    [Tag.HEAP_DUMP]: "heapDump",
+    [Tag.CPU_SAMPLES]: "cpuSamples",
+    [Tag.CONTROL_SETTINGS]: "controlSettings",
+    [Tag.HEAP_DUMP_SEGMENT]: "heapDump",
+};
 
 const readRecord = async (buffer: Buffer, visitor: Visitor, idSize: number, readId: ReaderFunc<bigint>) => {
     const tag = await buffer.getUint8();
@@ -501,35 +513,28 @@ const readRecord = async (buffer: Buffer, visitor: Visitor, idSize: number, read
         return;
     }
 
-    // statement of hell
-    switch (tag) {
-        case Tag.UTF8: {
-            if (rv.utf8) {
-                await rv.utf8(await readId(), decoder.decode(await buffer.get(length - idSize)));
-            } else {
-                await readRecordRaw(buffer, rv, length);
+    if (recordHandlers[tag] in rv) {
+        // fast path escape
+        switch (tag) {
+            case Tag.UTF8: {
+                await rv.utf8?.(await readId(), decoder.decode(await buffer.get(length - idSize)));
+                return;
             }
-            return;
-        }
-        case Tag.LOAD_CLASS: {
-            if (rv.loadClass) {
-                await rv.loadClass(await buffer.getUint32(), await readId(), await buffer.getUint32(), await readId());
-            } else {
-                await readRecordRaw(buffer, rv, length);
+            case Tag.LOAD_CLASS: {
+                await rv.loadClass?.(
+                    await buffer.getUint32(),
+                    await readId(),
+                    await buffer.getUint32(),
+                    await readId()
+                );
+                return;
             }
-            return;
-        }
-        case Tag.UNLOAD_CLASS: {
-            if (rv.unloadClass) {
-                await rv.unloadClass(await buffer.getUint32());
-            } else {
-                await readRecordRaw(buffer, rv, length);
+            case Tag.UNLOAD_CLASS: {
+                await rv.unloadClass?.(await buffer.getUint32());
+                return;
             }
-            return;
-        }
-        case Tag.FRAME: {
-            if (rv.frame) {
-                await rv.frame(
+            case Tag.FRAME: {
+                await rv.frame?.(
                     await readId(),
                     await readId(),
                     await readId(),
@@ -537,13 +542,9 @@ const readRecord = async (buffer: Buffer, visitor: Visitor, idSize: number, read
                     await buffer.getUint32(),
                     await buffer.getInt32()
                 );
-            } else {
-                await readRecordRaw(buffer, rv, length);
+                return;
             }
-            return;
-        }
-        case Tag.TRACE: {
-            if (rv.trace) {
+            case Tag.TRACE: {
                 const stackNum = await buffer.getUint32();
                 const threadNum = await buffer.getUint32();
                 const numFrames = await buffer.getUint32();
@@ -553,14 +554,10 @@ const readRecord = async (buffer: Buffer, visitor: Visitor, idSize: number, read
                     frames[i] = await readId();
                 }
 
-                await rv.trace(stackNum, threadNum, frames);
-            } else {
-                await readRecordRaw(buffer, rv, length);
+                await rv.trace?.(stackNum, threadNum, frames);
+                return;
             }
-            return;
-        }
-        case Tag.ALLOC_SITES: {
-            if (rv.allocSites) {
+            case Tag.ALLOC_SITES: {
                 const flags = await buffer.getUint16();
                 const cutoffRatio = await buffer.getUint32();
                 const liveBytes = await buffer.getUint32();
@@ -582,15 +579,11 @@ const readRecord = async (buffer: Buffer, visitor: Visitor, idSize: number, read
                     };
                 }
 
-                await rv.allocSites(flags, cutoffRatio, liveBytes, liveInsts, allocBytes, allocInsts, sites);
-            } else {
-                await readRecordRaw(buffer, rv, length);
+                await rv.allocSites?.(flags, cutoffRatio, liveBytes, liveInsts, allocBytes, allocInsts, sites);
+                return;
             }
-            return;
-        }
-        case Tag.START_THREAD: {
-            if (rv.startThread) {
-                await rv.startThread(
+            case Tag.START_THREAD: {
+                await rv.startThread?.(
                     await buffer.getUint32(),
                     await readId(),
                     await buffer.getUint32(),
@@ -598,40 +591,28 @@ const readRecord = async (buffer: Buffer, visitor: Visitor, idSize: number, read
                     await readId(),
                     await readId()
                 );
-            } else {
-                await readRecordRaw(buffer, rv, length);
+                return;
             }
-            return;
-        }
-        case Tag.END_THREAD: {
-            if (rv.endThread) {
-                await rv.endThread(await buffer.getUint32());
-            } else {
-                await readRecordRaw(buffer, rv, length);
+            case Tag.END_THREAD: {
+                await rv.endThread?.(await buffer.getUint32());
+                return;
             }
-            return;
-        }
-        case Tag.HEAP_SUMMARY: {
-            if (rv.heapSummary) {
-                await rv.heapSummary(
+            case Tag.HEAP_SUMMARY: {
+                await rv.heapSummary?.(
                     await buffer.getUint32(),
                     await buffer.getUint32(),
                     await buffer.getBigUint64(),
                     await buffer.getBigUint64()
                 );
-            } else {
-                await readRecordRaw(buffer, rv, length);
+                return;
             }
-            return;
-        }
-        case Tag.HEAP_DUMP:
-        case Tag.HEAP_DUMP_SEGMENT: {
-            if (rv.heapDump) {
-                const hdrv = await rv.heapDump(tag === Tag.HEAP_DUMP_SEGMENT);
+            case Tag.HEAP_DUMP:
+            case Tag.HEAP_DUMP_SEGMENT: {
+                const hdrv = await rv.heapDump?.(tag === Tag.HEAP_DUMP_SEGMENT);
                 if (hdrv) {
                     let remaining = length;
                     while (remaining > 0) {
-                        remaining -= await readHDSubRecord(buffer, hdrv, idSize, readId);
+                        remaining -= await readSubRecord(buffer, hdrv, idSize, readId);
                     }
 
                     if (remaining !== 0) {
@@ -640,13 +621,9 @@ const readRecord = async (buffer: Buffer, visitor: Visitor, idSize: number, read
                 } else {
                     await buffer.skip(length);
                 }
-            } else {
-                await readRecordRaw(buffer, rv, length);
+                return;
             }
-            return;
-        }
-        case Tag.CPU_SAMPLES: {
-            if (rv.cpuSamples) {
+            case Tag.CPU_SAMPLES: {
                 const totalSamples = await buffer.getUint32();
                 const numTraces = await buffer.getUint32();
 
@@ -655,23 +632,19 @@ const readRecord = async (buffer: Buffer, visitor: Visitor, idSize: number, read
                     traces[i] = { samples: await buffer.getUint32(), stackNum: await buffer.getUint32() };
                 }
 
-                await rv.cpuSamples(totalSamples, traces);
-            } else {
-                await readRecordRaw(buffer, rv, length);
+                await rv.cpuSamples?.(totalSamples, traces);
+                return;
             }
-            return;
-        }
-        case Tag.CONTROL_SETTINGS: {
-            if (rv.controlSettings) {
-                await rv.controlSettings(await buffer.getUint32(), await buffer.getUint16());
-            } else {
-                await readRecordRaw(buffer, rv, length);
+            case Tag.CONTROL_SETTINGS: {
+                await rv.controlSettings?.(await buffer.getUint32(), await buffer.getUint16());
+                return;
             }
-            return;
         }
+    } else if (rv.raw) {
+        await rv.raw(await buffer.get(length));
+    } else {
+        await buffer.skip(length);
     }
-
-    await readRecordRaw(buffer, rv, length);
 };
 
 export const read = async (stream: ReadableStream<Uint8Array>, visitor: Visitor) => {
