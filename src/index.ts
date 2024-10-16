@@ -193,6 +193,14 @@ export const valueSize = (type: number | Type, idSize: number = -1): number => {
 
 type ReaderFunc<T> = () => Promise<T>;
 
+interface ReaderContext {
+    buffer: Buffer;
+    idSize: number;
+    flags: number;
+
+    readId: ReaderFunc<bigint>;
+}
+
 const idReader = (buffer: Buffer, size: number): ReaderFunc<bigint> => {
     // realistically speaking, you're only ever going to have 8 (64-bit) and 4 (32-bit)
     // but might as well account for smaller sizes if we can read them
@@ -234,12 +242,9 @@ const valueReader = (buffer: Buffer, type: number | Type, readId: ReaderFunc<big
     throw new Error(`Unsupported value type ${type}`);
 };
 
-const readSubRecord = async (
-    buffer: Buffer,
-    visitor: HeapDumpRecordVisitor,
-    idSize: number,
-    readId: ReaderFunc<bigint>
-): Promise<number> => {
+const readSubRecord = async (ctx: ReaderContext, visitor: HeapDumpRecordVisitor): Promise<number> => {
+    const { buffer, idSize, readId } = ctx;
+
     const tag = await buffer.getUint8();
     switch (tag) {
         case HeapDumpTag.GC_ROOT_UNKNOWN: {
@@ -330,17 +335,23 @@ const readSubRecord = async (
                 const constPoolSize = await buffer.getUint16();
                 length += 2;
 
+                const skipValues = (ctx.flags & ReaderFlags.SKIP_VALUES) > 0;
+
                 const constPool = new Array<PoolItem>(constPoolSize);
                 for (let i = 0; i < constPoolSize; i++) {
                     const index = await buffer.getUint16();
                     const type = await buffer.getUint8();
 
+                    const size = valueSize(type, idSize);
                     constPool[i] = {
                         index,
-                        value: { type, value: await valueReader(buffer, type, readId)() },
+                        value: {
+                            type,
+                            value: skipValues ? await buffer.skip(size) : await valueReader(buffer, type, readId)(),
+                        },
                     };
 
-                    length += 3 + valueSize(type, idSize);
+                    length += 3 + size;
                 }
 
                 const numStaticFields = await buffer.getUint16();
@@ -351,13 +362,17 @@ const readSubRecord = async (
                     const name = await readId();
                     const type = await buffer.getUint8();
 
+                    const size = valueSize(type, idSize);
                     staticFields[i] = {
                         name,
                         type,
-                        value: { type, value: await valueReader(buffer, type, readId)() },
+                        value: {
+                            type,
+                            value: skipValues ? await buffer.skip(size) : await valueReader(buffer, type, readId)(),
+                        },
                     };
 
-                    length += idSize + 1 + valueSize(type, idSize);
+                    length += idSize + 1 + size;
                 }
 
                 const numInstFields = await buffer.getUint16();
@@ -456,28 +471,36 @@ const readSubRecord = async (
             return 1 + idSize * (2 + numElems) + 8;
         }
         case HeapDumpTag.GC_PRIM_ARRAY_DUMP: {
-            let numElems: number, elemType: number;
+            let numElems: number, size: number;
             if (visitor.gcPrimArrayDump) {
                 const arrObjId = await readId();
                 const stackNum = await buffer.getUint32();
                 numElems = await buffer.getUint32();
-                elemType = await buffer.getUint8();
-
-                const readValue = valueReader(buffer, elemType, readId);
+                const elemType = await buffer.getUint8();
+                size = valueSize(elemType, idSize);
 
                 const elems = new Array<Value<any>>(numElems);
-                for (let i = 0; i < numElems; i++) {
-                    elems[i] = { type: elemType, value: await readValue() };
+                if ((ctx.flags & ReaderFlags.SKIP_VALUES) > 0) {
+                    await buffer.skip(numElems * size);
+
+                    elems.fill({ type: elemType, value: undefined });
+                } else {
+                    const readValue = valueReader(buffer, elemType, readId);
+
+                    for (let i = 0; i < numElems; i++) {
+                        elems[i] = { type: elemType, value: await readValue() };
+                    }
                 }
 
                 await visitor.gcPrimArrayDump(arrObjId, stackNum, elemType, elems);
             } else {
                 await buffer.skip(idSize + 4);
                 numElems = await buffer.getUint32();
-                elemType = await buffer.getUint8();
-                await buffer.skip(numElems * valueSize(elemType, idSize));
+                const elemType = await buffer.getUint8();
+                size = valueSize(elemType, idSize);
+                await buffer.skip(numElems * size);
             }
-            return 1 + idSize + 9 + numElems * valueSize(elemType, idSize);
+            return 1 + idSize + 9 + numElems * size;
         }
     }
 
@@ -502,7 +525,9 @@ const recordHandlers: Record<number, string> = {
     [Tag.HEAP_DUMP_SEGMENT]: "heapDump",
 };
 
-const readRecord = async (buffer: Buffer, visitor: Visitor, idSize: number, readId: ReaderFunc<bigint>) => {
+const readRecord = async (ctx: ReaderContext, visitor: Visitor) => {
+    const { buffer, idSize, readId } = ctx;
+
     const tag = await buffer.getUint8();
     const tsDelta = await buffer.getUint32();
     const length = await buffer.getUint32();
@@ -612,7 +637,7 @@ const readRecord = async (buffer: Buffer, visitor: Visitor, idSize: number, read
                 if (hdrv) {
                     let remaining = length;
                     while (remaining > 0) {
-                        remaining -= await readSubRecord(buffer, hdrv, idSize, readId);
+                        remaining -= await readSubRecord(ctx, hdrv);
                     }
 
                     if (remaining !== 0) {
@@ -647,19 +672,24 @@ const readRecord = async (buffer: Buffer, visitor: Visitor, idSize: number, read
     }
 };
 
-export const read = async (stream: ReadableStream<Uint8Array>, visitor: Visitor) => {
+export enum ReaderFlags {
+    SKIP_VALUES = 1 << 0,
+}
+
+export const read = async (stream: ReadableStream<Uint8Array>, visitor: Visitor, flags: number = 0) => {
     const buffer = wrap(stream);
 
     const header = decoder.decode(await buffer.take(0));
     const idSize = await buffer.getUint32();
     const timestamp = await buffer.getBigUint64();
 
+    const ctx: ReaderContext = { buffer, idSize, flags, readId: idReader(buffer, idSize) };
+
     await visitor.header?.(header, idSize, timestamp);
 
-    const readId = idReader(buffer, idSize);
     try {
         while (true) {
-            await readRecord(buffer, visitor, idSize, readId);
+            await readRecord(ctx, visitor);
         }
     } catch (e) {
         if (e !== EOF) {

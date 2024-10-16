@@ -31,35 +31,38 @@ const arrayToView = (arr: Uint8Array): DataView => {
     return new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
 };
 
-const update = async (buffer: Buffer, new_: Uint8Array) => {
-    if (buffer.offset >= buffer.view.byteLength) {
-        buffer.view = arrayToView(new_);
-    } else {
-        const unread = new Uint8Array(
-            buffer.view.buffer,
-            buffer.view.byteOffset + buffer.offset,
-            buffer.view.byteLength - buffer.offset
-        );
+const ensure = async (buffer: Buffer, length: number) => {
+    if (!(buffer.offset + length > buffer.view.byteLength)) return;
 
-        const combined = new Uint8Array(unread.length + new_.length);
-        combined.set(unread);
-        combined.set(new_, unread.length);
+    const chunks: Uint8Array[] = [];
 
-        buffer.view = arrayToView(combined);
+    let chunksLength = 0;
+    if (buffer.offset < buffer.view.byteLength) {
+        // unread data
+        chunksLength = buffer.view.byteLength - buffer.offset;
+        chunks.push(new Uint8Array(buffer.view.buffer, buffer.view.byteOffset + buffer.offset, chunksLength));
     }
 
-    buffer.offset = 0;
-};
-
-const ensure = async (buffer: Buffer, length: number) => {
-    while (buffer.offset + length > buffer.view.byteLength) {
+    while (length > chunksLength) {
         const { done, value } = await buffer.reader.read();
         if (done) {
             throw EOF;
         }
 
-        await update(buffer, value);
+        chunksLength += value.byteLength;
+        chunks.push(value);
     }
+
+    const combined = new Uint8Array(chunksLength);
+
+    let offset = 0;
+    for (const chunk of chunks) {
+        combined.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+
+    buffer.offset = 0;
+    buffer.view = arrayToView(combined);
 };
 
 export const wrap = (stream: ReadableStream<Uint8Array>, littleEndian: boolean = DEFAULT_LITTLE_ENDIAN): Buffer => {
@@ -69,11 +72,14 @@ export const wrap = (stream: ReadableStream<Uint8Array>, littleEndian: boolean =
         view: new DataView(new ArrayBuffer(0)),
         offset: 0,
 
-        async get(length: number): Promise<Uint8Array> {
+        async get(length: number, copy: boolean = false): Promise<Uint8Array> {
             await ensure(this, length);
 
             const offset = this.view.byteOffset + this.offset;
-            const value = new Uint8Array(this.view.buffer.slice(offset, offset + length));
+            const value = copy
+                ? new Uint8Array(this.view.buffer.slice(offset, offset + length))
+                : new Uint8Array(this.view.buffer, offset, length);
+
             this.offset += length;
             return value;
         },
