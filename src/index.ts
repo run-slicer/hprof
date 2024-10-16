@@ -169,26 +169,26 @@ export interface Visitor {
     end?: () => Awaitable<void>;
 }
 
+const valueSizes: Record<Type, number> = {
+    [Type.ARRAY_OBJECT]: -1,
+    [Type.NORMAL_OBJECT]: -1,
+    [Type.BOOLEAN]: 1,
+    [Type.CHAR]: 2,
+    [Type.FLOAT]: 4,
+    [Type.DOUBLE]: 8,
+    [Type.BYTE]: 1,
+    [Type.SHORT]: 2,
+    [Type.INT]: 4,
+    [Type.LONG]: 8,
+};
+
 export const valueSize = (type: number | Type, idSize: number = -1): number => {
-    switch (type) {
-        case Type.BOOLEAN:
-        case Type.BYTE:
-            return 1;
-        case Type.FLOAT:
-        case Type.INT:
-            return 4;
-        case Type.DOUBLE:
-        case Type.LONG:
-            return 8;
-        case Type.CHAR:
-        case Type.SHORT:
-            return 2;
-        case Type.ARRAY_OBJECT:
-        case Type.NORMAL_OBJECT:
-            return idSize;
+    let size = valueSizes[type];
+    if (!size) {
+        throw new Error(`Unsupported value type ${type}`);
     }
 
-    throw new Error(`Unsupported value type ${type}`);
+    return size === -1 ? idSize : size;
 };
 
 type ReaderFunc<T> = () => Promise<T>;

@@ -1,4 +1,4 @@
-import { type Visitor, Type, valueSize } from "./";
+import { type Visitor, valueSize, Type } from "./";
 
 export enum SlurpEntryType {
     INSTANCE,
@@ -8,7 +8,8 @@ export enum SlurpEntryType {
 
 export interface SlurpEntry {
     type: SlurpEntryType;
-    name: string;
+    id: bigint;
+    name?: string;
 
     count: number;
     totalSize: number;
@@ -21,24 +22,19 @@ export interface SlurpVisitor extends Visitor {
     entries?: SlurpEntry[];
 }
 
+const update = (entry: SlurpEntry, size: number) => {
+    entry.count++;
+    entry.totalSize += size;
+    entry.largestSize = Math.max(entry.largestSize, size);
+};
+
 export const slurp = (): SlurpVisitor => {
     const strings = new Map<bigint, string>();
     const classes = new Map<bigint, string>();
     const sizes = new Map<bigint, number>();
-    const entries = new Map<string, SlurpEntry>();
 
-    const update = (type: SlurpEntryType, name: string, size: number) => {
-        let entry = entries.get(name);
-        if (!entry) {
-            entry = { type, name, count: 0, totalSize: 0, largestSize: 0 };
-
-            entries.set(name, entry);
-        }
-
-        entry.count++;
-        entry.totalSize += size;
-        entry.largestSize = Math.max(entry.largestSize, size);
-    };
+    const objEntries = new Map<bigint, SlurpEntry>();
+    const primEntries = new Map<number, SlurpEntry>();
 
     return {
         header(_header, idSize, timestamp) {
@@ -64,23 +60,53 @@ export const slurp = (): SlurpVisitor => {
                     return {
                         gcInstanceDump(objId, _stackNum, classObjId, fieldValues) {
                             sizes.set(objId, fieldValues.byteLength);
-                            update(
-                                SlurpEntryType.INSTANCE,
-                                `L${classes.get(classObjId) || "unknown"};`,
-                                fieldValues.byteLength
-                            );
+
+                            let entry = objEntries.get(classObjId);
+                            if (!entry) {
+                                entry = {
+                                    type: SlurpEntryType.INSTANCE,
+                                    id: classObjId,
+                                    count: 0,
+                                    largestSize: 0,
+                                    totalSize: 0,
+                                };
+                                objEntries.set(classObjId, entry);
+                            }
+                            update(entry, fieldValues.byteLength);
                         },
                         gcObjArrayDump(arrObjId, _stackNum, arrClsId, elems) {
                             const size = elems.reduce((acc, v) => acc + (sizes.get(v) || 0), 0);
-
                             sizes.set(arrObjId, size);
-                            update(SlurpEntryType.OBJ_ARRAY, classes.get(arrClsId) || "[Lunknown;", size);
+
+                            let entry = objEntries.get(arrClsId);
+                            if (!entry) {
+                                entry = {
+                                    type: SlurpEntryType.OBJ_ARRAY,
+                                    id: arrClsId,
+                                    count: 0,
+                                    largestSize: 0,
+                                    totalSize: 0,
+                                };
+                                objEntries.set(arrClsId, entry);
+                            }
+                            update(entry, size);
                         },
                         gcPrimArrayDump(arrObjId, _stackNum, elemType, elems) {
                             const size = valueSize(elemType, this.idSize) * elems.length;
-
                             sizes.set(arrObjId, size);
-                            update(SlurpEntryType.PRIM_ARRAY, `${Type[elemType].toLowerCase()}[]`, size);
+
+                            let entry = primEntries.get(elemType);
+                            if (!entry) {
+                                entry = {
+                                    type: SlurpEntryType.PRIM_ARRAY,
+                                    id: BigInt(elemType),
+                                    count: 0,
+                                    largestSize: 0,
+                                    totalSize: 0,
+                                };
+                                primEntries.set(elemType, entry);
+                            }
+                            update(entry, size);
                         },
                     };
                 },
@@ -88,11 +114,20 @@ export const slurp = (): SlurpVisitor => {
         },
         end() {
             strings.clear();
-            classes.clear();
             sizes.clear();
 
-            this.entries = Array.from(entries.values());
-            entries.clear();
+            this.entries = [...Array.from(objEntries.values()), ...Array.from(primEntries.values())];
+            objEntries.clear();
+            primEntries.clear();
+
+            for (const entry of this.entries) {
+                entry.name =
+                    entry.type === SlurpEntryType.PRIM_ARRAY
+                        ? `${Type[entry.id].toLowerCase()}[]`
+                        : classes.get(entry.id);
+            }
+
+            classes.clear();
         },
     };
 };
