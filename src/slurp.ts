@@ -43,7 +43,7 @@ interface EntryProto {
 interface ArrayEntryProto extends EntryProto {
     type: EntryType.OBJ_ARRAY | EntryType.PRIM_ARRAY;
     elemCount: number;
-    maxSize: number;
+    maxCount: number;
 }
 
 const primDescs = {
@@ -129,13 +129,14 @@ export const slurp = (): SlurpVisitor => {
                                     id: arrClsId,
                                     count: 0,
                                     elemCount: 0,
-                                    maxSize: 0,
+                                    maxCount: 0,
                                 };
                                 objArrays.set(arrClsId, entry);
                             }
 
                             entry.count++;
                             entry.elemCount += elems.length;
+                            entry.maxCount = Math.max(entry.maxCount, elems.length);
                         },
                         gcPrimArrayDump(_arrObjId, _stackNum, elemType, elems) {
                             let entry = primArrays.get(elemType);
@@ -145,14 +146,14 @@ export const slurp = (): SlurpVisitor => {
                                     id: BigInt(elemType),
                                     count: 0,
                                     elemCount: 0,
-                                    maxSize: 0,
+                                    maxCount: 0,
                                 };
                                 primArrays.set(elemType, entry);
                             }
 
                             entry.count++;
                             entry.elemCount += elems.length;
-                            entry.maxSize = Math.max(entry.maxSize, elems.length);
+                            entry.maxCount = Math.max(entry.maxCount, elems.length);
                         },
                     };
                 },
@@ -211,7 +212,7 @@ export const slurp = (): SlurpVisitor => {
                     ...inst,
                     name: classNames.get(id),
                     totalSize: allHeaders + allRefs,
-                    largestSize: arrayHeader + this.idSize * inst.maxSize,
+                    largestSize: arrayHeader + this.idSize * inst.maxCount,
                 });
             }
             objArrays.clear();
@@ -224,7 +225,7 @@ export const slurp = (): SlurpVisitor => {
                 const allValues = value * inst.elemCount;
                 const allPadding = inst.count * 4; /* 4 bytes per array - estimate, this data is lost */
 
-                let largestArr = arrayHeader + value * inst.maxSize;
+                let largestArr = arrayHeader + value * inst.maxCount;
                 largestArr += largestArr % this.idSize; // alignment
 
                 this.entries.push({
