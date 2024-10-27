@@ -100,7 +100,7 @@ export interface HeapDumpRecordVisitor {
         staticFields: Field[],
         instFields: Field[]
     ) => Awaitable<void>;
-    gcInstanceDump?: (objId: bigint, stackNum: number, classObjId: bigint, fieldValues: Uint8Array) => Awaitable<void>;
+    gcInstanceDump?: (objId: bigint, stackNum: number, clsObjId: bigint, fieldValues: Uint8Array) => Awaitable<void>;
     gcObjArrayDump?: (arrObjId: bigint, stackNum: number, arrClsId: bigint, elems: bigint[]) => Awaitable<void>;
     gcPrimArrayDump?: (
         arrObjId: bigint,
@@ -202,17 +202,11 @@ interface ReaderContext {
 }
 
 const idReader = (buffer: Buffer, size: number): ReaderFunc<bigint> => {
-    // realistically speaking, you're only ever going to have 8 (64-bit) and 4 (32-bit)
-    // but might as well account for smaller sizes if we can read them
     switch (size) {
         case 8:
-            return () => buffer.getBigInt64();
+            return buffer.getBigInt64.apply(buffer);
         case 4:
-            return async () => BigInt(await buffer.getInt32());
-        case 2:
-            return async () => BigInt(await buffer.getInt16());
-        case 1:
-            return async () => BigInt(await buffer.getInt8());
+            return () => buffer.getInt32().then(BigInt);
     }
 
     throw new Error(`Unsupported identifier size ${size}`);
@@ -322,7 +316,7 @@ const readSubRecord = async (ctx: ReaderContext, visitor: HeapDumpRecordVisitor)
         case HeapDumpTag.GC_CLASS_DUMP: {
             let length = idSize * 7 + 8;
             if (visitor.gcClassDump) {
-                const classObjId = await readId();
+                const clsObjId = await readId();
                 const stackNum = await buffer.getUint32();
                 const superObjId = await readId();
                 const loaderObjId = await readId();
@@ -387,7 +381,7 @@ const readSubRecord = async (ctx: ReaderContext, visitor: HeapDumpRecordVisitor)
                 }
 
                 await visitor.gcClassDump(
-                    classObjId,
+                    clsObjId,
                     stackNum,
                     superObjId,
                     loaderObjId,
@@ -438,10 +432,10 @@ const readSubRecord = async (ctx: ReaderContext, visitor: HeapDumpRecordVisitor)
             if (visitor.gcInstanceDump) {
                 const objId = await readId();
                 const stackNum = await buffer.getUint32();
-                const classObjId = await readId();
+                const clsObjId = await readId();
                 numBytes = await buffer.getUint32();
 
-                await visitor.gcInstanceDump(objId, stackNum, classObjId, await buffer.get(numBytes));
+                await visitor.gcInstanceDump(objId, stackNum, clsObjId, await buffer.get(numBytes));
             } else {
                 await buffer.skip(idSize * 2 + 4);
                 numBytes = await buffer.getUint32();
