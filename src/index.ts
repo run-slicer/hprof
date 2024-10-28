@@ -52,7 +52,7 @@ export enum Type {
 
 export interface Value<T> {
     type: number | Type;
-    value: T;
+    value?: T; // undefined with ReaderFlags.SKIP_VALUES
 }
 
 export interface NumberValue extends Value<number> {
@@ -93,8 +93,6 @@ export interface HeapDumpRecordVisitor {
         loaderObjId: bigint,
         signerObjId: bigint,
         protDomainObjId: bigint,
-        reserved1: bigint,
-        reserved2: bigint,
         instSize: number,
         pool: Pool,
         staticFields: Field[],
@@ -236,81 +234,67 @@ const valueReader = (buffer: Buffer, type: number | Type, readId: ReaderFunc<big
     throw new Error(`Unsupported value type ${type}`);
 };
 
+const constSubRecordHandlers: Record<number, { handler: string; size?: number; idCount?: number }> = {
+    [HeapDumpTag.GC_ROOT_UNKNOWN]: { handler: "gcRootUnknown" },
+    [HeapDumpTag.GC_ROOT_THREAD_OBJ]: { handler: "gcRootThreadObj", size: 8 },
+    [HeapDumpTag.GC_ROOT_JNI_GLOBAL]: { handler: "gcRootJniGlobal", idCount: 2 },
+    [HeapDumpTag.GC_ROOT_JNI_LOCAL]: { handler: "gcRootJniLocal", size: 8 },
+    [HeapDumpTag.GC_ROOT_JAVA_FRAME]: { handler: "gcRootJavaFrame", size: 8 },
+    [HeapDumpTag.GC_ROOT_NATIVE_STACK]: { handler: "gcRootNativeStack", size: 4 },
+    [HeapDumpTag.GC_ROOT_STICKY_CLASS]: { handler: "gcRootStickyClass" },
+    [HeapDumpTag.GC_ROOT_THREAD_BLOCK]: { handler: "gcRootThreadBlock", size: 4 },
+    [HeapDumpTag.GC_ROOT_MONITOR_USED]: { handler: "gcRootMonitorUsed" },
+};
+
 const readSubRecord = async (ctx: ReaderContext, visitor: HeapDumpRecordVisitor): Promise<number> => {
     const { buffer, idSize, readId } = ctx;
 
     const tag = await buffer.getUint8();
+
+    // fast path for sub-records with constant lengths
+    const constRec = constSubRecordHandlers[tag];
+    if (constRec && !(constRec.handler in visitor)) {
+        const size = (constRec.idCount || 1) * idSize + (constRec.size || 0);
+
+        await buffer.skip(size);
+        return 1 + size;
+    }
+
     switch (tag) {
         case HeapDumpTag.GC_ROOT_UNKNOWN: {
-            if (visitor.gcRootUnknown) {
-                await visitor.gcRootUnknown(await readId());
-            } else {
-                await buffer.skip(idSize);
-            }
+            await visitor.gcRootUnknown(await readId());
             return 1 + idSize;
         }
         case HeapDumpTag.GC_ROOT_THREAD_OBJ: {
-            if (visitor.gcRootThreadObj) {
-                await visitor.gcRootThreadObj(await readId(), await buffer.getUint32(), await buffer.getUint32());
-            } else {
-                await buffer.skip(idSize + 8);
-            }
+            await visitor.gcRootThreadObj(await readId(), await buffer.getUint32(), await buffer.getUint32());
             return 1 + idSize + 8;
         }
         case HeapDumpTag.GC_ROOT_JNI_GLOBAL: {
-            if (visitor.gcRootJniGlobal) {
-                await visitor.gcRootJniGlobal(await readId(), await readId());
-            } else {
-                await buffer.skip(idSize * 2);
-            }
+            await visitor.gcRootJniGlobal(await readId(), await readId());
             return 1 + idSize * 2;
         }
         case HeapDumpTag.GC_ROOT_JNI_LOCAL: {
-            if (visitor.gcRootJniLocal) {
-                await visitor.gcRootJniLocal(await readId(), await buffer.getUint32(), await buffer.getUint32());
-            } else {
-                await buffer.skip(idSize + 8);
-            }
+            await visitor.gcRootJniLocal(await readId(), await buffer.getUint32(), await buffer.getUint32());
             return 1 + idSize + 8;
         }
         case HeapDumpTag.GC_ROOT_JAVA_FRAME: {
-            if (visitor.gcRootJavaFrame) {
-                await visitor.gcRootJavaFrame(await readId(), await buffer.getUint32(), await buffer.getUint32());
-            } else {
-                await buffer.skip(idSize + 8);
-            }
+            await visitor.gcRootJavaFrame(await readId(), await buffer.getUint32(), await buffer.getUint32());
             return 1 + idSize + 8;
         }
         case HeapDumpTag.GC_ROOT_NATIVE_STACK: {
-            if (visitor.gcRootNativeStack) {
-                await visitor.gcRootNativeStack(await readId(), await buffer.getUint32());
-            } else {
-                await buffer.skip(idSize + 4);
-            }
+            await visitor.gcRootNativeStack(await readId(), await buffer.getUint32());
             return 1 + idSize + 4;
         }
         case HeapDumpTag.GC_ROOT_STICKY_CLASS: {
-            if (visitor.gcRootStickyClass) {
-                await visitor.gcRootStickyClass(await readId());
-            } else {
-                await buffer.skip(idSize);
-            }
+            await visitor.gcRootStickyClass(await readId());
             return 1 + idSize;
         }
         case HeapDumpTag.GC_ROOT_THREAD_BLOCK: {
-            if (visitor.gcRootThreadBlock) {
-                await visitor.gcRootThreadBlock(await readId(), await buffer.getUint32());
-            } else {
-                await buffer.skip(idSize + 4);
-            }
+            await visitor.gcRootThreadBlock(await readId(), await buffer.getUint32());
             return 1 + idSize + 4;
         }
         case HeapDumpTag.GC_ROOT_MONITOR_USED: {
-            if (visitor.gcRootMonitorUsed) {
-                await visitor.gcRootMonitorUsed(await readId());
-            } else {
-                await buffer.skip(idSize);
-            }
+            await visitor.gcRootMonitorUsed(await readId());
             return 1 + idSize;
         }
         case HeapDumpTag.GC_CLASS_DUMP: {
@@ -322,8 +306,7 @@ const readSubRecord = async (ctx: ReaderContext, visitor: HeapDumpRecordVisitor)
                 const loaderObjId = await readId();
                 const signerObjId = await readId();
                 const protDomainObjId = await readId();
-                const reserved1 = await readId();
-                const reserved2 = await readId();
+                await buffer.skip(idSize * 2); // reserved bytes
                 const instSize = await buffer.getUint32();
 
                 const constPoolSize = await buffer.getUint16();
@@ -387,8 +370,6 @@ const readSubRecord = async (ctx: ReaderContext, visitor: HeapDumpRecordVisitor)
                     loaderObjId,
                     signerObjId,
                     protDomainObjId,
-                    reserved1,
-                    reserved2,
                     instSize,
                     constPool,
                     staticFields,
@@ -452,8 +433,14 @@ const readSubRecord = async (ctx: ReaderContext, visitor: HeapDumpRecordVisitor)
                 const arrClsId = await readId();
 
                 const elems = new Array<bigint>(numElems);
-                for (let i = 0; i < numElems; i++) {
-                    elems[i] = await readId();
+                if ((ctx.flags & ReaderFlags.SKIP_VALUES) > 0) {
+                    await buffer.skip(numElems * idSize);
+
+                    elems.fill(0n);
+                } else {
+                    for (let i = 0; i < numElems; i++) {
+                        elems[i] = await readId();
+                    }
                 }
 
                 await visitor.gcObjArrayDump(arrObjId, stackNum, arrClsId, elems);

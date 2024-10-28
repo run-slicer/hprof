@@ -95,8 +95,6 @@ export const slurp = (): SlurpVisitor => {
                             _loaderObjId,
                             _signerObjId,
                             _protDomainObjId,
-                            _reserved1,
-                            _reserved2,
                             instSize,
                             _pool,
                             _staticFields,
