@@ -2,6 +2,7 @@
 // License: Public domain (or MIT if needed). Attribution appreciated.
 // https://gist.github.com/zlataovce/7db8bc7cfe8b7897816495bf2ec3858d
 const DEFAULT_LITTLE_ENDIAN = false;
+const MIN_READ = 1024 * 1024 * 20; // 20 MiB
 
 export const EOF = new Error("End of stream");
 
@@ -43,7 +44,8 @@ const ensure = async (buffer: Buffer, length: number) => {
         chunks.push(new Uint8Array(buffer.view.buffer, buffer.view.byteOffset + buffer.offset, chunksLength));
     }
 
-    while (length > chunksLength) {
+    const toRead = Math.max(length, MIN_READ);
+    while (toRead > chunksLength) {
         const { done, value } = await buffer.reader.read();
         if (done) {
             throw EOF;
