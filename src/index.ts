@@ -204,7 +204,7 @@ interface ReaderContext {
 const idReader = (buffer: Buffer, size: number): ReaderFunc<bigint> => {
     switch (size) {
         case 8:
-            return buffer.getBigInt64.apply(buffer);
+            return buffer.getBigInt64.bind(buffer);
         case 4:
             return () => buffer.getInt32().then(BigInt);
     }
@@ -216,18 +216,18 @@ const valueReader = (buffer: Buffer, type: number | Type, readId: ReaderFunc<big
     switch (type) {
         case Type.BOOLEAN:
         case Type.BYTE:
-            return () => buffer.getUint8();
+            return buffer.getUint8.bind(buffer);
         case Type.INT:
-            return () => buffer.getUint32();
+            return buffer.getUint32.bind(buffer);
         case Type.LONG:
-            return () => buffer.getBigUint64();
+            return buffer.getBigUint64.bind(buffer);
         case Type.FLOAT:
-            return () => buffer.getFloat32();
+            return buffer.getFloat32.bind(buffer);
         case Type.DOUBLE:
-            return () => buffer.getFloat64();
+            return buffer.getFloat64.bind(buffer);
         case Type.CHAR:
         case Type.SHORT:
-            return () => buffer.getUint16();
+            return buffer.getUint16.bind(buffer);
         case Type.ARRAY_OBJECT:
         case Type.NORMAL_OBJECT:
             return readId;
