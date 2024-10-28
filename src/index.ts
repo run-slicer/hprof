@@ -191,7 +191,7 @@ export const valueSize = (type: number | Type, idSize: number = -1): number => {
     return size === -1 ? idSize : size;
 };
 
-type ReaderFunc<T> = () => Promise<T>;
+type ReaderFunc<T> = () => T | PromiseLike<T>;
 
 interface ReaderContext {
     buffer: Buffer;
@@ -206,7 +206,7 @@ const idReader = (buffer: Buffer, size: number): ReaderFunc<bigint> => {
         case 8:
             return buffer.getBigInt64.bind(buffer);
         case 4:
-            return () => buffer.getInt32().then(BigInt);
+            return async () => BigInt(await buffer.getInt32());
     }
 
     throw new Error(`Unsupported identifier size ${size}`);

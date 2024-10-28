@@ -6,7 +6,7 @@ import { read, ReaderFlags, Tag } from "./";
 describe("reader", () => {
     it("read samples/Main_14891_02_10_2024_16_01_21.hprof", async () => {
         const stream = createReadStream("samples/Main_14891_02_10_2024_16_01_21.hprof", {
-            highWaterMark: 1024 * 1024 * 15 /* 15 MiB */,
+            highWaterMark: 1024 * 1024 * 20 /* 20 MiB */,
         });
 
         let count = 0;

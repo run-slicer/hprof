@@ -4,6 +4,8 @@
 const DEFAULT_LITTLE_ENDIAN = false;
 const MIN_READ = 1024 * 1024 * 20; // 20 MiB
 
+type Awaitable<T> = T | PromiseLike<T>;
+
 export const EOF = new Error("End of stream");
 
 export interface Buffer {
@@ -13,28 +15,26 @@ export interface Buffer {
     view: DataView;
     offset: number;
 
-    get(length: number): Promise<Uint8Array>;
-    skip(length: number): Promise<void>;
-    take(termValue: number): Promise<Uint8Array>; // exclusive
-    getFloat32(): Promise<number>;
-    getFloat64(): Promise<number>;
-    getInt8(): Promise<number>;
-    getInt16(): Promise<number>;
-    getInt32(): Promise<number>;
-    getUint8(): Promise<number>;
-    getUint16(): Promise<number>;
-    getUint32(): Promise<number>;
-    getBigInt64(): Promise<bigint>;
-    getBigUint64(): Promise<bigint>;
+    get(length: number): Awaitable<Uint8Array>;
+    skip(length: number): Awaitable<void>;
+    take(termValue: number): Awaitable<Uint8Array>; // exclusive
+    getFloat32(): Awaitable<number>;
+    getFloat64(): Awaitable<number>;
+    getInt8(): Awaitable<number>;
+    getInt16(): Awaitable<number>;
+    getInt32(): Awaitable<number>;
+    getUint8(): Awaitable<number>;
+    getUint16(): Awaitable<number>;
+    getUint32(): Awaitable<number>;
+    getBigInt64(): Awaitable<bigint>;
+    getBigUint64(): Awaitable<bigint>;
 }
 
 const arrayToView = (arr: Uint8Array): DataView => {
     return new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
 };
 
-const ensure = async (buffer: Buffer, length: number) => {
-    if (!(buffer.offset + length > buffer.view.byteLength)) return;
-
+const nextChunk = async (buffer: Buffer, length: number) => {
     const chunks: Uint8Array[] = [];
 
     let chunksLength = 0;
@@ -74,9 +74,7 @@ export const wrap = (stream: ReadableStream<Uint8Array>, littleEndian: boolean =
         view: new DataView(new ArrayBuffer(0)),
         offset: 0,
 
-        async get(length: number, copy: boolean = false): Promise<Uint8Array> {
-            await ensure(this, length);
-
+        _get(length: number, copy: boolean): Uint8Array {
             const offset = this.view.byteOffset + this.offset;
             const value = copy
                 ? new Uint8Array(this.view.buffer.slice(offset, offset + length))
@@ -86,7 +84,15 @@ export const wrap = (stream: ReadableStream<Uint8Array>, littleEndian: boolean =
             return value;
         },
 
-        async skip(length: number): Promise<void> {
+        get(length: number, copy: boolean = false): Awaitable<Uint8Array> {
+            if (this.offset + length > this.view.byteLength) {
+                return nextChunk(this, length).then(() => this._get(length, copy));
+            }
+
+            return this._get(length, copy);
+        },
+
+        async skip(length: number) {
             while (length > 0) {
                 const available = this.view.byteLength - this.offset;
                 if (available >= length) {
@@ -106,84 +112,144 @@ export const wrap = (stream: ReadableStream<Uint8Array>, littleEndian: boolean =
             }
         },
 
-        async getBigInt64(): Promise<bigint> {
-            await ensure(this, 8);
-
+        _getBigInt64(): bigint {
             const value = this.view.getBigInt64(this.offset, this.littleEndian);
             this.offset += 8;
             return value;
         },
 
-        async getBigUint64(): Promise<bigint> {
-            await ensure(this, 8);
+        getBigInt64(): Awaitable<bigint> {
+            if (this.offset + 8 > this.view.byteLength) {
+                return nextChunk(this, 8).then(() => this._getBigInt64());
+            }
 
+            return this._getBigInt64();
+        },
+
+        _getBigUint64(): bigint {
             const value = this.view.getBigUint64(this.offset, this.littleEndian);
             this.offset += 8;
             return value;
         },
 
-        async getFloat32(): Promise<number> {
-            await ensure(this, 4);
+        getBigUint64(): Awaitable<bigint> {
+            if (this.offset + 8 > this.view.byteLength) {
+                return nextChunk(this, 8).then(() => this._getBigUint64());
+            }
 
+            return this._getBigUint64();
+        },
+
+        _getFloat32(): number {
             const value = this.view.getFloat32(this.offset, this.littleEndian);
             this.offset += 4;
             return value;
         },
 
-        async getFloat64(): Promise<number> {
-            await ensure(this, 8);
+        getFloat32(): Awaitable<number> {
+            if (this.offset + 4 > this.view.byteLength) {
+                return nextChunk(this, 4).then(() => this._getFloat32());
+            }
 
+            return this._getFloat32();
+        },
+
+        _getFloat64(): number {
             const value = this.view.getFloat64(this.offset, this.littleEndian);
             this.offset += 8;
             return value;
         },
 
-        async getInt16(): Promise<number> {
-            await ensure(this, 2);
+        getFloat64(): Awaitable<number> {
+            if (this.offset + 8 > this.view.byteLength) {
+                return nextChunk(this, 8).then(() => this._getFloat64());
+            }
 
+            return this._getFloat64();
+        },
+
+        _getInt16(): number {
             const value = this.view.getInt16(this.offset, this.littleEndian);
             this.offset += 2;
             return value;
         },
 
-        async getInt32(): Promise<number> {
-            await ensure(this, 4);
+        getInt16(): Awaitable<number> {
+            if (this.offset + 2 > this.view.byteLength) {
+                return nextChunk(this, 2).then(() => this._getInt16());
+            }
 
+            return this._getInt16();
+        },
+
+        _getInt32(): number {
             const value = this.view.getInt32(this.offset, this.littleEndian);
             this.offset += 4;
             return value;
         },
 
-        async getInt8(): Promise<number> {
-            await ensure(this, 1);
+        getInt32(): Awaitable<number> {
+            if (this.offset + 4 > this.view.byteLength) {
+                return nextChunk(this, 4).then(() => this._getInt32());
+            }
 
+            return this._getInt32();
+        },
+
+        _getInt8(): number {
             const value = this.view.getInt8(this.offset);
             this.offset += 1;
             return value;
         },
 
-        async getUint16(): Promise<number> {
-            await ensure(this, 2);
+        getInt8(): Awaitable<number> {
+            if (this.offset + 1 > this.view.byteLength) {
+                return nextChunk(this, 1).then(() => this._getInt8());
+            }
 
+            return this._getInt8();
+        },
+
+        _getUint16(): number {
             const value = this.view.getUint16(this.offset, littleEndian);
             this.offset += 2;
             return value;
         },
 
-        async getUint32(): Promise<number> {
-            await ensure(this, 4);
+        getUint16(): Awaitable<number> {
+            if (this.offset + 2 > this.view.byteLength) {
+                return nextChunk(this, 2).then(() => this._getUint16());
+            }
 
+            return this._getUint16();
+        },
+
+        _getUint32(): number {
             const value = this.view.getUint32(this.offset, littleEndian);
             this.offset += 4;
             return value;
         },
 
-        async getUint8(): Promise<number> {
-            await ensure(this, 1);
+        getUint32(): Awaitable<number> {
+            if (this.offset + 4 > this.view.byteLength) {
+                return nextChunk(this, 4).then(() => this._getUint32());
+            }
 
+            return this._getUint32();
+        },
+
+        _getUint8(): number {
             const value = this.view.getUint8(this.offset);
             this.offset += 1;
             return value;
+        },
+
+        getUint8(): Awaitable<number> {
+            if (this.offset + 1 > this.view.byteLength) {
+                return nextChunk(this, 1).then(() => this._getUint8());
+            }
+
+            return this._getUint8();
         },
 
         async take(termValue: number): Promise<Uint8Array> {
@@ -199,5 +265,5 @@ export const wrap = (stream: ReadableStream<Uint8Array>, littleEndian: boolean =
 
             return new Uint8Array(result);
         },
-    };
+    } as Buffer;
 };
