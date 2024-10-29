@@ -2,7 +2,8 @@
 // License: Public domain (or MIT if needed). Attribution appreciated.
 // https://gist.github.com/zlataovce/7db8bc7cfe8b7897816495bf2ec3858d
 const DEFAULT_LITTLE_ENDIAN = false;
-const MIN_READ = 1024 * 1024 * 20; // 20 MiB
+const MIN_READ = 1024 * 1024 * 10; // 10 MiB
+const INITIAL_BUF_SIZE = MIN_READ * 1.5; // 15 MiB
 
 type Awaitable<T> = T | PromiseLike<T>;
 
@@ -55,7 +56,13 @@ const nextChunk = async (buffer: Buffer, length: number) => {
         chunks.push(value);
     }
 
-    const combined = new Uint8Array(chunksLength);
+    // try to reuse old buffer
+    let arrayBuf = buffer.view.buffer;
+    if (arrayBuf.byteLength < chunksLength) {
+        arrayBuf = new ArrayBuffer(chunksLength);
+    }
+
+    const combined = new Uint8Array(arrayBuf, 0, chunksLength);
 
     let offset = 0;
     for (const chunk of chunks) {
@@ -71,7 +78,7 @@ export const wrap = (stream: ReadableStream<Uint8Array>, littleEndian: boolean =
     return {
         reader: stream.getReader(),
         littleEndian,
-        view: new DataView(new ArrayBuffer(0)),
+        view: new DataView(new ArrayBuffer(INITIAL_BUF_SIZE), 0, 0),
         offset: 0,
 
         _get(length: number, copy: boolean): Uint8Array {

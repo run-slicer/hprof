@@ -106,7 +106,7 @@ export const slurp = (): SlurpVisitor => {
                                 superClsId: superObjId,
                             });
                         },
-                        gcInstanceDump(_objId, _stackNum, clsObjId, _fieldValues) {
+                        gcInstanceDump(_objId, _stackNum, clsObjId, _numBytes, _fieldVals) {
                             let entry = instances.get(clsObjId);
                             if (!entry) {
                                 entry = {
